@@ -1,5 +1,5 @@
 CFLAGS+= -Wall
-LDFLAGS+= -shared -fpic -ldl -lcrypto
+LDFLAGS+= -lcrypto -L/usr/local/lib/ -lssl
 
 all:
 	gcc server.c -o server $(CFLAGS) $(LDFLAGS)
