@@ -18,21 +18,21 @@ Once installed openssl, to connect you have to type:
 Once connected it will prompt you the password, just type `p4ssword`.
 
 ## Available commands
-* kill <PID>
+* `kill <PID>`
 + It will kill the process with the given `process ID`
 
-* whoami
+* `whoami`
 + It will give you the name of the user that is executing the backdoor
 
-* exec <command>
+* `exec <command>`
 + It will execute the given `command`, like in bash shell
 
-* download <URL>
+* `download <URL>`
 + It will download the given `URL` to the current working directory
 
-* shutdown
+* `shutdown`
 + It will shut down the backdoor server
 
-* help
+* `help`
 + It will output the command list
 
